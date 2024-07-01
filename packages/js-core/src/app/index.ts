@@ -1,10 +1,9 @@
+import { setAttributeInApp } from "@formbricks/lib/js/attributes";
+import { ErrorHandler } from "@formbricks/lib/js/errors";
+import { Logger } from "@formbricks/lib/js/logger";
 import { TJsAppConfigInput, TJsTrackProperties } from "@formbricks/types/js";
 import { CommandQueue } from "../shared/commandQueue";
-import { ErrorHandler } from "../shared/errors";
-import { Logger } from "../shared/logger";
 import { trackCodeAction } from "./lib/actions";
-import { getApi } from "./lib/api";
-import { setAttributeInApp } from "./lib/attributes";
 import { initialize } from "./lib/initialize";
 import { checkPageUrl } from "./lib/noCodeActions";
 import { logoutPerson, resetPerson } from "./lib/person";
@@ -58,7 +57,6 @@ const formbricks = {
   logout,
   reset,
   registerRouteChange,
-  getApi,
 };
 
 export type TFormbricksApp = typeof formbricks;

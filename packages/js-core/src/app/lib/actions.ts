@@ -1,8 +1,8 @@
 import { FormbricksAPI } from "@formbricks/api";
+import { InvalidCodeError, NetworkError, Result, err, okVoid } from "@formbricks/lib/js/errors";
+import { Logger } from "@formbricks/lib/js/logger";
+import { getIsDebug } from "@formbricks/lib/js/utils";
 import { TJsActionInput, TJsTrackProperties } from "@formbricks/types/js";
-import { InvalidCodeError, NetworkError, Result, err, okVoid } from "../../shared/errors";
-import { Logger } from "../../shared/logger";
-import { getIsDebug } from "../../shared/utils";
 import { AppConfig } from "./config";
 import { sync } from "./sync";
 import { triggerSurvey } from "./widget";
@@ -46,7 +46,6 @@ export const trackAction = async (
         responseMessage: res.error.message,
       });
     }
-
     // we skip the resync on a new action since this leads to too many requests if the user has a lot of actions
     // also this always leads to a second sync call on the `New Session` action
     // when debug: sync after every action for testing purposes

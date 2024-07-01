@@ -1,10 +1,9 @@
-import { NetworkError, Result, err, okVoid } from "@formbricks/lib/js/errors";
-import { Logger } from "@formbricks/lib/js/logger";
-import { AppConfig } from "./config";
+import { NetworkError, Result, err, okVoid } from "@formbricks/lib/errors";
+import { RNAppConfig } from "@formbricks/lib/js/config";
+import { Logger } from "@formbricks/lib/logger";
 import { deinitalize, initialize } from "./initialize";
-import { closeSurvey } from "./widget";
 
-const appConfig = AppConfig.getInstance();
+const appConfig = RNAppConfig.getInstance();
 const logger = Logger.getInstance();
 
 export const logoutPerson = async (): Promise<void> => {
@@ -14,7 +13,6 @@ export const logoutPerson = async (): Promise<void> => {
 
 export const resetPerson = async (): Promise<Result<void, NetworkError>> => {
   logger.debug("Resetting state & getting new state from backend");
-  closeSurvey();
   const syncParams = {
     environmentId: appConfig.get().environmentId,
     apiHost: appConfig.get().apiHost,

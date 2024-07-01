@@ -1,8 +1,7 @@
-import { ErrorHandler, Result } from "@formbricks/lib/js/errors";
+import { ErrorHandler, Result } from "@formbricks/lib/errors";
 import { wrapThrowsAsync } from "@formbricks/types/errorHandlers";
 import { TJsPackageType } from "@formbricks/types/js";
-import { checkInitialized as checkInitializedInApp } from "../app/lib/initialize";
-import { checkInitialized as checkInitializedWebsite } from "../website/lib/initialize";
+import { checkInitialized } from "./initialize";
 
 export class CommandQueue {
   private queue: {
@@ -48,8 +47,7 @@ export class CommandQueue {
       // make sure formbricks is initialized
       if (currentItem.checkInitialized) {
         // call different function based on package type
-        const initResult =
-          currentItem.packageType === "website" ? checkInitializedWebsite() : checkInitializedInApp();
+        const initResult = checkInitialized();
 
         if (initResult && initResult.ok !== true) {
           errorHandler.handle(initResult.error);
