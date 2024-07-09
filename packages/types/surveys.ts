@@ -922,3 +922,14 @@ export const ZSurveyRecallItem = z.object({
 });
 
 export type TSurveyRecallItem = z.infer<typeof ZSurveyRecallItem>;
+
+export const CopySurveyFormValidation = z.array(
+  z.object({
+    productId: z.string(),
+    targetenvironmentId: z.string(),
+    environmentType: z.string(),
+    productName: z.string(),
+  })
+);
+
+export type TCopySurveyFormData = z.infer<typeof CopySurveyFormValidation>;

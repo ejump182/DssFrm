@@ -1,10 +1,12 @@
 "use server";
 
 import { Prisma as prismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { prisma } from "@formbricks/database";
 import { authOptions } from "@formbricks/lib/authOptions";
 import { hasUserEnvironmentAccess } from "@formbricks/lib/environment/auth";
+import { getOrganizationByEnvironmentId } from "@formbricks/lib/organization/service";
 import { structuredClone } from "@formbricks/lib/pollyfills/structuredClone";
 import { segmentCache } from "@formbricks/lib/segment/cache";
 import { createSegment } from "@formbricks/lib/segment/service";
@@ -13,6 +15,7 @@ import { surveyCache } from "@formbricks/lib/survey/cache";
 import { deleteSurvey, duplicateSurvey, getSurvey, getSurveys } from "@formbricks/lib/survey/service";
 import { generateSurveySingleUseId } from "@formbricks/lib/utils/singleUseSurveys";
 import { AuthorizationError, ResourceNotFoundError } from "@formbricks/types/errors";
+import { ZProduct } from "@formbricks/types/product";
 import { TSurveyFilterCriteria } from "@formbricks/types/surveys";
 
 export const getSurveyAction = async (surveyId: string) => {
@@ -39,25 +42,45 @@ export const duplicateSurveyAction = async (environmentId: string, surveyId: str
 export const copyToOtherEnvironmentAction = async (
   environmentId: string,
   surveyId: string,
-  targetEnvironmentId: string
+  targetEnvironmentId: string,
+  productId: string
 ) => {
   const session = await getServerSession(authOptions);
+
   if (!session) throw new AuthorizationError("Not authorized");
 
   const isAuthorizedToAccessSourceEnvironment = await hasUserEnvironmentAccess(
     session.user.id,
     environmentId
   );
+
   if (!isAuthorizedToAccessSourceEnvironment) throw new AuthorizationError("Not authorized");
 
   const isAuthorizedToAccessTargetEnvironment = await hasUserEnvironmentAccess(
     session.user.id,
     targetEnvironmentId
   );
+
   if (!isAuthorizedToAccessTargetEnvironment) throw new AuthorizationError("Not authorized");
 
   const isAuthorized = await canUserAccessSurvey(session.user.id, surveyId);
   if (!isAuthorized) throw new AuthorizationError("Not authorized");
+
+  const existingEnvironment = await prisma.environment.findFirst({ where: { id: environmentId } });
+
+  if (!existingEnvironment) {
+    throw new ResourceNotFoundError("Environment", environmentId);
+  }
+
+  const existingTargetEnvironment = await prisma.environment.findFirst({
+    where: {
+      id: targetEnvironmentId,
+    },
+  });
+
+  if (!existingTargetEnvironment) {
+    throw new ResourceNotFoundError("Environment", targetEnvironmentId);
+  }
 
   const existingSurvey = await prisma.survey.findFirst({
     where: {
@@ -221,7 +244,7 @@ export const copyToOtherEnvironmentAction = async (
   if (existingSurvey.segment) {
     if (existingSurvey.segment.isPrivate) {
       const newInlineSegment = await createSegment({
-        environmentId,
+        environmentId: targetEnvironmentId,
         title: `${newSurvey.id}`,
         isPrivate: true,
         surveyId: newSurvey.id,
@@ -246,21 +269,56 @@ export const copyToOtherEnvironmentAction = async (
         environmentId: newSurvey.environmentId,
       });
     } else {
-      await prisma.survey.update({
-        where: {
-          id: newSurvey.id,
-        },
-        data: {
-          segment: {
-            connect: {
-              id: existingSurvey.segment.id,
+      // public segment
+
+      // if the environment and targetEnvironment are the same, we connect the copied segment to the copied survey.
+      if (environmentId === targetEnvironmentId) {
+        await prisma.survey.update({
+          where: {
+            id: newSurvey.id,
+          },
+          data: {
+            segment: {
+              connect: {
+                id: existingSurvey.segment.id,
+              },
             },
           },
-        },
-      });
+        });
+      } else {
+        // if a public segment of the same name exists in the target environment, we make a new segment in the target environment and then connect the copied survey to it.
+        const existingSegmentInTargetEnvironment = await prisma.segment.findFirst({
+          where: {
+            title: existingSurvey.segment.title,
+            isPrivate: false,
+            environmentId: targetEnvironmentId,
+          },
+        });
+
+        await prisma.segment.create({
+          data: {
+            title: existingSegmentInTargetEnvironment
+              ? `${existingSurvey.segment.title} (copied from environment: ${environmentId})`
+              : existingSurvey.segment.title,
+            environmentId: targetEnvironmentId,
+            isPrivate: false,
+            filters: existingSurvey.segment.filters,
+            surveys: {
+              connect: {
+                id: newSurvey.id,
+              },
+            },
+          },
+        });
+      }
 
       segmentCache.revalidate({
         id: existingSurvey.segment.id,
+        environmentId: newSurvey.environmentId,
+      });
+
+      surveyCache.revalidate({
+        id: newSurvey.id,
         environmentId: newSurvey.environmentId,
       });
     }
@@ -270,7 +328,155 @@ export const copyToOtherEnvironmentAction = async (
     id: newSurvey.id,
     environmentId: targetEnvironmentId,
   });
+  // update the environment with the productId in which the survey has been copied.
+  await prisma.environment.update({
+    where: {
+      id: targetEnvironmentId,
+    },
+    data: {
+      productId: productId,
+      surveys: {
+        connect: {
+          id: newSurvey.id,
+        },
+      },
+    },
+  });
+
   return newSurvey;
+};
+
+export const getProductSurveyAction = async (environmentId: string) => {
+  const session = await getServerSession(authOptions);
+  if (!session) throw new AuthorizationError("Not authorized");
+
+  const organization = await getOrganizationByEnvironmentId(environmentId);
+
+  if (!organization) {
+    throw new Error("No organization found");
+  }
+
+  const products = await prisma.product.findMany({
+    where: {
+      organizationId: organization.id,
+    },
+  });
+
+  // Fetch environments for each product
+  const productsWithEnvironments = await Promise.all(
+    products.map(async (product) => {
+      const environments = await prisma.environment.findMany({
+        where: {
+          productId: product.id,
+        },
+      });
+
+      // Map environments to conform to ZEnvironment schema
+      const mappedEnvironments = environments.map((env) => ({
+        id: env.id,
+        createdAt: env.createdAt,
+        updatedAt: env.updatedAt,
+        type: env.type, // Assuming EnvironmentType is defined correctly
+        productId: env.productId,
+        appSetupCompleted: env.appSetupCompleted,
+        websiteSetupCompleted: env.websiteSetupCompleted,
+      }));
+
+      // Construct product with mapped environments
+      const productWithEnvironments = {
+        ...product,
+        environments: mappedEnvironments,
+      };
+
+      console.log("Product with environments:", productWithEnvironments);
+
+      return productWithEnvironments; // Return each product with its environments
+    })
+  );
+
+  console.log("Products with environments:", productsWithEnvironments);
+
+  return productsWithEnvironments;
+};
+
+// export const getProductSurveyAction = async (environmentId: string) => {
+//   const session = await getServerSession(authOptions);
+//   if (!session) throw new AuthorizationError("Not authorized");
+
+//   const organization = await getOrganizationByEnvironmentId(environmentId);
+//   console.log("Organization:", organization);
+
+//   if (!organization) {
+//     throw new Error("No organization found");
+//   }
+
+//   const products = await prisma.product.findMany({
+//     where: {
+//       organizationId: organization.id,
+//     },
+//   });
+
+//   // Fetch environments for each product
+//   const productsWithEnvironments = await Promise.all(
+//     products.map(async (product) => {
+//       const environments = await prisma.environment.findMany({
+//         where: {
+//           productId: product.id,
+//         },
+//       });
+
+//       const mappedEnvironments = environments.map((env) => ({
+//         id: env.id,
+//         createdAt: env.createdAt,
+//         updatedAt: env.updatedAt,
+//         type: env.type as EnvironmentType, // Assuming EnvironmentType is defined correctly
+//         productId: env.productId,
+//         appSetupCompleted: env.appSetupCompleted,
+//         websiteSetupCompleted: env.websiteSetupCompleted,
+//       }));
+
+//       const productWithEnvironments = {
+//         ...product,
+//         environments: mappedEnvironments,
+//       };
+
+//       return {
+//         ...product,
+//         environments: environments.map((env) => ({
+//           id: env.id,
+//     createdAt: env.createdAt,
+//     updatedAt: env.updatedAt,
+//     type: env.type,
+//     productId: env.productId,
+//     appSetupCompleted: env.appSetupCompleted,
+//     websiteSetupCompleted: env.websiteSetupCompleted,
+//         })),
+//       };
+//     })
+//   );
+
+//   console.log("pppppp",productsWithEnvironments);
+
+//   return productsWithEnvironments;
+// };
+
+export const getSurveytype = async (surveyId: string) => {
+  const session = await getServerSession(authOptions);
+  if (!session) throw new AuthorizationError("Not authorized");
+
+  const findsurvey = await prisma.survey.findFirst({
+    where: {
+      id: surveyId,
+    },
+  });
+
+  if (!findsurvey) {
+    throw new ResourceNotFoundError("Survey", surveyId);
+  }
+
+  const surveytype = findsurvey?.type;
+
+  return surveytype;
 };
 
 export const deleteSurveyAction = async (surveyId: string) => {
