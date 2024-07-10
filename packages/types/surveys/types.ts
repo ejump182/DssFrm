@@ -20,8 +20,16 @@ export const ZI18nString = z.record(z.string()).refine((obj) => "default" in obj
 
 export type TI18nString = z.infer<typeof ZI18nString>;
 
-export const ZSurveyThankYouCard = z.object({
+const ZEndScreenType = z.union([z.literal("endScreen"), z.literal("redirectToUrl")]);
+
+const ZSurveyEndingBase = z.object({
+  id: z.string(),
+  type: ZEndScreenType,
   enabled: z.boolean(),
+});
+
+export const ZSurveyEndScreenCard = ZSurveyEndingBase.extend({
+  type: z.literal("endScreen"),
   headline: ZI18nString.optional(),
   subheader: ZI18nString.optional(),
   buttonLabel: ZI18nString.optional(),
@@ -29,6 +37,16 @@ export const ZSurveyThankYouCard = z.object({
   imageUrl: z.string().optional(),
   videoUrl: z.string().optional(),
 });
+export type TSurveyEndScreenCard = z.infer<typeof ZSurveyEndScreenCard>;
+
+export const ZSurveyRedirectUrlCard = ZSurveyEndingBase.extend({
+  type: z.literal("redirectToUrl"),
+  url: z.string().url("Invalid redirect Url in Ending card").optional(),
+  label: z.string().optional(),
+});
+export type TSurveyRedirectUrlCard = z.infer<typeof ZSurveyRedirectUrlCard>;
+
+export const ZSurveyEndings = z.array(z.union([ZSurveyEndScreenCard, ZSurveyRedirectUrlCard]));
 
 export enum TSurveyQuestionTypeEnum {
   FileUpload = "fileUpload",
@@ -143,7 +161,7 @@ export type TSurveyVerifyEmail = z.infer<typeof ZSurveyVerifyEmail>;
 
 export type TSurveyWelcomeCard = z.infer<typeof ZSurveyWelcomeCard>;
 
-export type TSurveyThankYouCard = z.infer<typeof ZSurveyThankYouCard>;
+export type TSurveyEndings = z.infer<typeof ZSurveyEndings>;
 
 export type TSurveyHiddenFields = z.infer<typeof ZSurveyHiddenFields>;
 
@@ -186,7 +204,7 @@ export type TSurveyLogicCondition = z.infer<typeof ZSurveyLogicCondition>;
 export const ZSurveyLogicBase = z.object({
   condition: ZSurveyLogicCondition.optional(),
   value: z.union([z.string(), z.array(z.string())]).optional(),
-  destination: z.union([z.string(), z.literal("end")]).optional(),
+  destination: z.union([z.string(), z.literal("end:1")]).optional(),
 });
 
 export const ZSurveyFileUploadLogic = ZSurveyLogicBase.extend({
@@ -559,7 +577,6 @@ export const ZSurvey = z
     displayOption: ZSurveyDisplayOption,
     autoClose: z.number().nullable(),
     triggers: z.array(z.object({ actionClass: ZActionClass })),
-    redirectUrl: z.string().url({ message: "Invalid redirect URL" }).nullable(),
     recontactDays: z.number().nullable(),
     displayLimit: z.number().nullable(),
     welcomeCard: ZSurveyWelcomeCard,
@@ -576,7 +593,19 @@ export const ZSurvey = z
         });
       }
     }),
-    thankYouCard: ZSurveyThankYouCard,
+    endings: ZSurveyEndings.min(1, {
+      message: "Survey must have at least one ending card",
+    }).superRefine((endings, ctx) => {
+      const endingIds = endings.map((q) => q.id);
+      const uniqueEndingIds = new Set(endingIds);
+      if (uniqueEndingIds.size !== endingIds.length) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Ending IDs must be unique",
+          path: [endingIds.findIndex((id, index) => endingIds.indexOf(id) !== index), "id"],
+        });
+      }
+    }),
     hiddenFields: ZSurveyHiddenFields,
     delay: z.number(),
     autoComplete: z.number().min(1, { message: "Response limit must be greater than 0" }).nullable(),
@@ -595,7 +624,7 @@ export const ZSurvey = z
     languages: z.array(ZSurveyLanguage),
   })
   .superRefine((survey, ctx) => {
-    const { questions, languages, welcomeCard, thankYouCard } = survey;
+    const { questions, languages, welcomeCard, endings } = survey;
 
     let multiLangIssue: z.IssueData | null;
 
@@ -884,47 +913,51 @@ export const ZSurvey = z
         });
       });
     }
+    endings.forEach((ending, index) => {
+      // thank you card validations
+      if (ending.type === "endScreen" && ending.enabled) {
+        if (ending.headline) {
+          const multiLangIssue = validateCardFieldsForAllLanguages(
+            "cardHeadline",
+            ending.headline,
+            languages,
+            "end",
+            index
+          );
 
-    // thank you card validations
-    if (thankYouCard.enabled) {
-      if (thankYouCard.headline) {
-        multiLangIssue = validateCardFieldsForAllLanguages(
-          "cardHeadline",
-          thankYouCard.headline,
-          languages,
-          "thankYou"
-        );
+          if (multiLangIssue) {
+            ctx.addIssue(multiLangIssue);
+          }
+        }
 
-        if (multiLangIssue) {
-          ctx.addIssue(multiLangIssue);
+        if (ending.subheader) {
+          const multiLangIssue = validateCardFieldsForAllLanguages(
+            "subheader",
+            ending.subheader,
+            languages,
+            "end",
+            index
+          );
+
+          if (multiLangIssue) {
+            ctx.addIssue(multiLangIssue);
+          }
+        }
+
+        if (ending.buttonLabel) {
+          const multiLangIssue = validateCardFieldsForAllLanguages(
+            "endingCardButtonLabel",
+            ending.buttonLabel,
+            languages,
+            "end",
+            index
+          );
+          if (multiLangIssue) {
+            ctx.addIssue(multiLangIssue);
+          }
         }
       }
-
-      if (thankYouCard.subheader) {
-        multiLangIssue = validateCardFieldsForAllLanguages(
-          "subheader",
-          thankYouCard.subheader,
-          languages,
-          "thankYou"
-        );
-
-        if (multiLangIssue) {
-          ctx.addIssue(multiLangIssue);
-        }
-      }
-
-      if (thankYouCard.buttonLabel) {
-        multiLangIssue = validateCardFieldsForAllLanguages(
-          "thankYouCardButtonLabel",
-          thankYouCard.buttonLabel,
-          languages,
-          "thankYou"
-        );
-        if (multiLangIssue) {
-          ctx.addIssue(multiLangIssue);
-        }
-      }
-    }
+    });
   });
 
 // ZSurvey is a refinement, so to extend it to ZSurveyUpdateInput, we need to transform the innerType and then apply the same refinements.
@@ -949,7 +982,7 @@ export const ZSurveyInput = z.object({
   recontactDays: z.number().nullish(),
   welcomeCard: ZSurveyWelcomeCard.optional(),
   questions: ZSurveyQuestions.optional(),
-  thankYouCard: ZSurveyThankYouCard.optional(),
+  endings: ZSurveyEndings.optional(),
   hiddenFields: ZSurveyHiddenFields.optional(),
   delay: z.number().optional(),
   autoComplete: z.number().nullish(),
